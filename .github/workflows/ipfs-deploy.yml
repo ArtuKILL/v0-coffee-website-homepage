@@ -1,0 +1,79 @@
+name: Build & Deploy to IPFS (Pinata)
+
+on:
+  push:
+    branches:
+      - main   # o la rama que uses para despliegue
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1) Checkout del código
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # 2) Node (ajusta la versión si hace falta)
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 3) Instalar dependencias
+      - name: Install dependencies
+        run: npm ci
+
+      # 4) Build del proyecto
+      - name: Build project
+        run: npm run build
+
+      # 5) (Opcional) si necesitas exportar a estático tipo Next:
+      # - name: Export static site
+      #   run: npm run export
+
+      # Asegúrate de que en este punto tu sitio final está en la carpeta `out/`
+
+      # 6) Comprimir carpeta `out`
+      - name: Create archive from out folder
+        run: |
+          cd out
+          tar -czf ../site.tar.gz .
+
+      # 7) Subir a IPFS via Pinata
+      - name: Upload to IPFS via Pinata
+        env:
+          PINATA_API_KEY: ${{ secrets.PINATA_API_KEY }}
+          PINATA_SECRET_API_KEY: ${{ secrets.PINATA_SECRET_API_KEY }}
+          PIN_NAME: ${{ secrets.PIN_NAME }}
+        run: |
+          # Subimos el tar.gz como pin en Pinata
+          RESPONSE=$(curl -s -X POST "https://api.pinata.cloud/pinning/pinFileToIPFS" \
+            -H "pinata_api_key: $PINATA_API_KEY" \
+            -H "pinata_secret_api_key: $PINATA_SECRET_API_KEY" \
+            -F "file=@site.tar.gz" \
+            -F "pinataMetadata={\"name\":\"${PIN_NAME:-github-ipfs-deploy}\",\"keyvalues\":{\"repo\":\"${GITHUB_REPOSITORY}\",\"sha\":\"${GITHUB_SHA}\"}}" \
+            )
+
+          echo "Pinata response: $RESPONSE"
+          
+          # Extraer el CID de la respuesta
+          CID=$(echo "$RESPONSE" | jq -r '.IpfsHash')
+
+          if [ "$CID" = "null" ] || [ -z "$CID" ]; then
+            echo "❌ Error obteniendo el CID de IPFS"
+            exit 1
+          fi
+
+          echo "✅ Deploy OK. CID: $CID"
+          echo "ipfs_cid=$CID" >> $GITHUB_OUTPUT
+
+      # 8) Mostrar URLs de acceso
+      - name: Show IPFS gateway URLs
+        run: |
+          echo "CID desplegado:"
+          echo "${{ steps.build-and-deploy.outputs.ipfs_cid }}"
+          echo ""
+          echo "Puedes verlo en distintos gateways (pueden tardar unos minutos en propagar):"
+          echo "https://ipfs.io/ipfs/${{ steps.build-and-deploy.outputs.ipfs_cid }}"
+          echo "https://gateway.pinata.cloud/ipfs/${{ steps.build-and-deploy.outputs.ipfs_cid }}"
